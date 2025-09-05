@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>银色粒子变换器</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        canvas { display: block; }
+        .ui-container { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 10; }
+        #transformButton {
+            padding: 12px 24px; font-size: 16px; color: white;
+            background-color: rgba(45, 45, 45, 0.7); border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px; cursor: pointer; transition: background-color 0.2s, transform 0.1s;
+        }
+        #transformButton:hover { background-color: rgba(65, 65, 65, 0.8); }
+        #transformButton:active { transform: scale(0.95); }
+        .instructions {
+            position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.5); font-size: 14px; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="particleCanvas"></canvas>
+    <div class="instructions">Drag to orbit • Scroll to zoom • Button to transform</div>
+    <div class="ui-container">
+        <button id="transformButton">Transform Shape</button>
+    </div>
+
+    <script>
+    // =========================================================================
+    // 阶段一：基础架构
+    // =========================================================================
+    const canvas = document.getElementById('particleCanvas');
+    const ctx = canvas.getContext('2d');
+    const transformButton = document.getElementById('transformButton');
+
+    let width, height, centerX, centerY;
+    let particles = [];
+    
+    // ★★★ 配置更新 ★★★
+    const PARTICLE_COUNT = 18000;      // 1. 稍微增加粒子数量
+    const PARTICLE_BASE_SIZE = 1.5;
+    const TRANSITION_SPEED = 0.05;
+    const AUTO_ROTATE_SPEED = 0.001;
+
+    // 视图/相机控制
+    let fov = 350; 
+    let rotationX = 0.2;
+    let rotationY = 0;
+    let targetRotationX = 0.2;
+    let targetRotationY = 0;
+    
+    let isMouseDown = false;
+    let lastMouseX = 0;
+    let lastMouseY = 0;
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+        centerX = width / 2;
+        centerY = height / 2;
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    // =========================================================================
+    // 阶段二：粒子系统核心
+    // =========================================================================
+    class Particle {
+        constructor(x = 0, y = 0, z = 0) {
+            this.x = x; this.y = y; this.z = z;
+            this.targetX = x; this.targetY = y; this.targetZ = z;
+            // ★★★ 2. 颜色统一为银色系（不同亮度的灰色） ★★★
+            // 随机生成一个亮度在70%到95%之间的灰色
+            this.color = `hsl(0, 0%, ${70 + Math.random() * 25}%)`; 
+        }
+
+        update() {
+            this.x += (this.targetX - this.x) * TRANSITION_SPEED;
+            this.y += (this.targetY - this.y) * TRANSITION_SPEED;
+            this.z += (this.targetZ - this.z) * TRANSITION_SPEED;
+        }
+        
+        draw() {
+            const cosX = Math.cos(rotationX); const sinX = Math.sin(rotationX);
+            const cosY = Math.cos(rotationY); const sinY = Math.sin(rotationY);
+            let rotY_x = this.x * cosY + this.z * sinY;
+            let rotY_z = this.z * cosY - this.x * sinY;
+            let rotX_y = this.y * cosX - rotY_z * sinX;
+            let rotX_z = rotY_z * cosX + this.y * sinX;
+
+            const scale = fov / (fov + rotX_z);
+            
+            if (scale > 0) {
+                const screenX = centerX + rotY_x * scale;
+                const screenY = centerY + rotX_y * scale;
+                const size = PARTICLE_BASE_SIZE * scale;
+
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = Math.min(1, Math.max(0, scale));
+                ctx.fillRect(screenX - size / 2, screenY - size / 2, size, size);
+            }
+        }
+    }
+
+    function initParticles() {
+        particles = [];
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            particles.push(new Particle());
+        }
+    }
+
+    // =========================================================================
+    // 阶段三：效果系统 (无变化)
+    // =========================================================================
+    const effectFunctions = [];
+    let currentEffectIndex = 0;
+
+    // 效果1：球体
+    effectFunctions.push(() => {
+        const radius = 200;
+        particles.forEach(p => {
+            const phi = Math.acos(-1 + (2 * Math.random()));
+            const theta = Math.random() * 2 * Math.PI;
+            p.targetX = radius * Math.cos(theta) * Math.sin(phi);
+            p.targetY = radius * Math.sin(theta) * Math.sin(phi);
+            p.targetZ = radius * Math.cos(phi);
+        });
+    });
+    // 效果2：环面纽结
+    effectFunctions.push(() => {
+        const R = 180, r = 70, p_knot = 3, q_knot = 4;
+        particles.forEach(p => {
+            const theta = Math.random() * 2 * Math.PI;
+            const x = (R + r * Math.cos(q_knot * theta)) * Math.cos(p_knot * theta);
+            const y = (R + r * Math.cos(q_knot * theta)) * Math.sin(p_knot * theta);
+            const z = r * Math.sin(q_knot * theta);
+            p.targetX = x; p.targetY = y; p.targetZ = z;
+        });
+    });
+    // 效果3：爱泽华吸引子
+    effectFunctions.push(() => {
+        const a=0.95, b=0.7, c=0.6, d=3.5, e=0.25, f=0.1;
+        let x = 0.1, y = 0, z = 0;
+        particles.forEach(p => {
+            for(let i = 0; i < 5; i++) {
+                let dx = (z-b)*x - d*y, dy = d*x + (z-b)*y, dz = c + a*z - (z*z*z)/3 - (x*x+y*y)*(1+e*z) + f*z*x*x*x;
+                x += dx * 0.01; y += dy * 0.01; z += dz * 0.01;
+            }
+            p.targetX = x * 150; p.targetY = y * 150; p.targetZ = z * 150 - 100;
+        });
+    });
+    // 效果4：螺旋星系
+    effectFunctions.push(() => {
+        const radius = 250, arms = 3, spread = 0.5;
+        const armSeparation = 2 * Math.PI / arms;
+        particles.forEach(p => {
+            const dist = Math.random();
+            const angle = dist * 5 * Math.PI;
+            const armIndex = Math.floor(Math.random() * arms);
+            const randomX = (Math.random() - 0.5) * spread * (1 - dist) * 100;
+            const randomY = (Math.random() - 0.5) * 20;
+            const randomZ = (Math.random() - 0.5) * spread * (1 - dist) * 100;
+            const armAngle = armSeparation * armIndex;
+            p.targetX = Math.cos(angle + armAngle) * dist * radius + randomX;
+            p.targetY = randomY;
+            p.targetZ = Math.sin(angle + armAngle) * dist * radius + randomZ;
+        });
+    });
+
+
+    function applyEffect() {
+        const effect = effectFunctions[currentEffectIndex];
+        effect();
+        currentEffectIndex = (currentEffectIndex + 1) % effectFunctions.length;
+    }
+    transformButton.addEventListener('click', () => {
+        transformButton.textContent = 'Transforming...';
+        setTimeout(() => {
+             applyEffect();
+             setTimeout(() => { transformButton.textContent = 'Transform Shape'; }, 500);
+        }, 50);
+    });
+
+    // =========================================================================
+    // 阶段四：交互逻辑 (无变化)
+    // =========================================================================
+    canvas.addEventListener('mousedown', (e) => { isMouseDown = true; lastMouseX = e.clientX; lastMouseY = e.clientY; });
+    canvas.addEventListener('mouseup', () => { isMouseDown = false; });
+    canvas.addEventListener('mouseout', () => { isMouseDown = false; });
+    canvas.addEventListener('mousemove', (e) => {
+        if (isMouseDown) {
+            const dx = e.clientX - lastMouseX; const dy = e.clientY - lastMouseY;
+            targetRotationY += dx * 0.01; targetRotationX -= dy * 0.01;
+            lastMouseX = e.clientX; lastMouseY = e.clientY;
+        }
+    });
+    canvas.addEventListener('wheel', (e) => {
+        e.preventDefault(); fov -= e.deltaY * 0.5;
+        fov = Math.max(100, Math.min(800, fov));
+    });
+    
+    // =========================================================================
+    // 动画循环 (无变化)
+    // =========================================================================
+    function animate() {
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.fillRect(0, 0, width, height);
+
+        if (!isMouseDown) { targetRotationY += AUTO_ROTATE_SPEED; }
+        
+        rotationY += (targetRotationY - rotationY) * 0.05;
+        rotationX += (targetRotationX - rotationX) * 0.05;
+        
+        for (let i = 0; i < particles.length; i++) {
+            particles[i].update();
+            particles[i].draw();
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    // 启动
+    initParticles();
+    applyEffect();
+    animate();
+    </script>
+</body>
+</html>
